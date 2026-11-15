@@ -29,6 +29,7 @@ from popup_ui import TranslatePopup
 from tray_manager import TrayManager
 from vocabulary_store import VocabularyStore
 from global_hotkey import GlobalHotkey, _VOCABULARY_HOTKEY_ID
+from qt_runtime import configure_qt_runtime
 
 
 class TranslateApp(QObject):
@@ -41,6 +42,7 @@ class TranslateApp(QObject):
 
     def __init__(self, vocabulary=None):
         super().__init__()
+        configure_qt_runtime()
         self.app = QApplication(sys.argv)
         self.app.setQuitOnLastWindowClosed(False)
         self.app.setApplicationName("翻译助手")

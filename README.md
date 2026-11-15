@@ -112,6 +112,7 @@ translate-assistant/
 ├── vocabulary_ui.py         # 词库列表/搜索/详情和复用收藏按钮
 ├── vocabulary_entry.py      # 英文收藏规范化、旧中文记录只读英文展示
 ├── global_hotkey.py         # Windows Alt+1/Alt+2独立注册、Qt原生消息与退出注销
+├── qt_runtime.py            # 源码Qt插件定位,不依赖当前用户绝对路径
 ├── translator/
 │   ├── __init__.py
 │   ├── base.py              # 翻译器抽象基类（策略模式）
@@ -283,6 +284,26 @@ Alt+1、托盘菜单和双击入口共用焦点处理，恢复最小化后自动
 应用运行时，Alt+1 切换翻译面板，Alt+2 切换词库。窗口未显示时打开，已显示时隐藏；最小化时恢复而非隐藏。隐藏不退出助手、不丢输入、不删除词库。不同入口打开的是同一个词库窗口，快捷键均可关闭。托盘菜单和面板按钮仍只负责打开，不改成开关。出现删除确认框时暂不切换窗口，避免误绕过确认。
 
 使用主键盘数字1/2，而不是小键盘。两组快捷键独立注册，某一组被其他软件占用不会让另一组失效；失败有提示，仍可用托盘菜单打开。退出应用后释放两组快捷键。
+
+**源码启动报 Could not find the Qt platform plugin "windows"？**
+先在发生错误的电脑、项目根目录运行：
+
+```powershell
+.\run.bat --diagnose
+```
+
+诊断会输出实际Python、虚拟环境、Qt版本和插件目录，并短暂显示一个测试窗口。不输出API密钥。源码启动自动使用当前PyQt5包中的插件，避免外部Qt环境变量干扰；不会修改Windows系统环境变量或exe打包器路径。
+
+- 若实际Python不在项目`.venv`内，请确认虚拟环境在本项目目录创建，依赖也安装在同一个解释器中。
+- 若明确提示缺`qwindows.dll`，在该虚拟环境重新安装完整组件：
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install --force-reinstall PyQt5==5.15.11 PyQt5-Qt5==5.15.2 PyQt5_sip==12.19.0
+.\run.bat --diagnose
+```
+
+- 如果DLL存在但初始化仍失败，保留诊断输出检查依赖/架构/安全软件记录；不要下载来源不明DLL，不要永久设置指向其他电脑的Qt路径。
+- `run.bat`适用于源码；使用exe时不需要安装PyQt5，exe插件问题需检查完整打包产物。
 
 **启动时出现了终端窗口？**
 用 `run.bat` 启动不会残留终端窗口。如果自己执行 `python main.py`，程序会隐藏专属于它的控制台；想完全无窗口，请用 `pythonw main.py` 或直接运行打包好的 exe。
