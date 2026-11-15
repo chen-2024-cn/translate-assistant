@@ -1,0 +1,36 @@
+# Python and local development
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+.idea/
+.vscode/
+.claude/
+
+# Reproducible build outputs and verification data
+/build/
+/dist/
+/artifacts/
+*.exe
+*.msi
+*.zip
+
+# Private configuration and user data
+.env
+.env.*
+!.env.example
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.log
+settings.json
+config.local.*
+
+# OS files
+Thumbs.db
+Desktop.ini
+.DS_Store
