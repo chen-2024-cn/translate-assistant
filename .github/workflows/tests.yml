@@ -28,7 +28,8 @@ jobs:
       - name: Check interpreter
         run: python python_runtime.py
       - name: Install compatible binary dependencies
-        run: python -m pip install --only-binary=:all: -r requirements.txt
+        run: >-
+          python -m pip install --only-binary=:all: -r requirements.txt
       - name: Check dependency consistency
         run: python -m pip check
       - name: Check source release configuration
@@ -54,7 +55,8 @@ jobs:
           cache: pip
           cache-dependency-path: requirements.lock.txt
       - name: Install fixed build-baseline runtime dependencies
-        run: python -m pip install --only-binary=:all: -r requirements.lock.txt
+        run: >-
+          python -m pip install --only-binary=:all: -r requirements.lock.txt
       - name: Run mocked-network regression tests
         env:
           QT_QPA_PLATFORM: offscreen
