@@ -20,8 +20,8 @@ def find_windows_plugins(package_root: Path, reported: str = "") -> Path:
         "当前Python环境缺少PyQt5 Windows平台插件 qwindows.dll。\n"
         f"Python: {sys.executable}\nPyQt5: {root}\n"
         "请在该环境重新安装完整的Qt组件,不要单独下载DLL:\n"
-        f'"{sys.executable}" -m pip install --force-reinstall '
-        "PyQt5==5.15.11 PyQt5-Qt5==5.15.2 PyQt5_sip==12.19.0"
+        f'"{sys.executable}" -m pip install --only-binary=:all: --force-reinstall '
+        '"PyQt5>=5.15.11,<5.16" "PyQt5-Qt5>=5.15.2,<5.16" "PyQt5-sip>=12.20.1,<13"'
     )
 
 
@@ -33,7 +33,7 @@ def configure_qt_runtime():
         from PyQt5.QtCore import QCoreApplication, QLibraryInfo
     except ImportError as e:
         raise RuntimeError(f"当前Python未完整安装PyQt5: {sys.executable}\n"
-                           "请用这个解释器安装 requirements.lock.txt") from e
+                           "请用这个解释器执行 -m pip install --only-binary=:all: -r requirements.txt") from e
     plugins = find_windows_plugins(Path(PyQt5.__file__).parent,
                                    QLibraryInfo.location(QLibraryInfo.PluginsPath))
     os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = str(plugins / "platforms")

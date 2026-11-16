@@ -14,6 +14,9 @@ try:
 except Exception:
     pass
 
+from python_runtime import check_python_runtime
+check_python_runtime()
+
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QObject, pyqtSignal, Qt
 

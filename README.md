@@ -49,13 +49,22 @@
 
 ### 方式二：源码运行
 
-安装 Windows Python **3.14 x64**，在项目根目录执行：
+源码兼容验证目标为 **标准 CPython 3.11～3.15、Windows x64**（不是 ARM、32 位或自由线程版）。建议普通用户选择稳定的 Python 3.14；3.15 请使用对应标准发行版，并以本仓库 CI 结果为准。
+
+先检查本机版本，再明确选择创建虚拟环境的解释器。下面以 Python 3.14 为例；若使用 3.15，把 `py -3.14` 改成 `py -3.15`：
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.lock.txt
+py -0p
+py -3.14 -m venv .venv
+.\.venv\Scripts\python.exe --version
+.\.venv\Scripts\python.exe -m pip install --only-binary=:all: -r requirements.txt
+.\run.bat --diagnose
 powershell -ExecutionPolicy Bypass -File scripts\set_credentials.ps1
 ```
+
+**源码安装用 `requirements.txt`，不要在 Python 3.15 环境安装旧的 `requirements.lock.txt`。** 通用依赖要求 `PyQt5-sip>=12.20.1,<13`，避免旧版 SIP 在 3.15 下退回 C++ 源码编译。`--only-binary=:all:` 在没有兼容预编译包时直接报错，而不是要求安装编译器。
+
+已有 `.venv` 的 Python 版本不会因系统升级而改变。切换版本需关闭使用它的进程，并先把旧 `.venv` 重命名备份（确认备份目录不存在），再创建新环境；不要从另一台电脑复制虚拟环境。
 
 配置后重新打开终端/应用。双击 `run.bat` 通过项目 `.venv` 无控制台启动；调试可运行：
 
@@ -63,7 +72,7 @@ powershell -ExecutionPolicy Bypass -File scripts\set_credentials.ps1
 .\.venv\Scripts\python.exe main.py
 ```
 
-脚本优先使用 `.venv`，否则选择 Python Launcher/PATH 的解释器。`requirements.txt` 是直接依赖范围；`requirements.lock.txt` 固定本项目验证环境的运行依赖，`requirements-build.lock.txt` 追加打包依赖。不保证其他 Python 版本或架构能使用同一锁文件。
+脚本优先使用 `.venv`，否则选择 Python Launcher/PATH 的解释器，并在加载 Qt 前检查版本和架构。`requirements.txt` 为跨版本源码安装范围；`requirements.lock.txt` 是 **Python 3.14 的固定构建基线**，`requirements-build.lock.txt` 追加打包依赖。通用安装与固定构建使用不同环境，不要混用两种依赖方案。
 
 ---
 
@@ -113,6 +122,7 @@ translate-assistant/
 ├── vocabulary_entry.py      # 英文收藏规范化、旧中文记录只读英文展示
 ├── global_hotkey.py         # Windows Alt+1/Alt+2独立注册、Qt原生消息与退出注销
 ├── qt_runtime.py            # 源码Qt插件定位,不依赖当前用户绝对路径
+├── python_runtime.py        # 源码解释器版本/架构预检,冻结exe不受目标Python影响
 ├── translator/
 │   ├── __init__.py
 │   ├── base.py              # 翻译器抽象基类（策略模式）
@@ -248,6 +258,8 @@ elif config.TRANSLATOR == "myservice":
 
 ## 📦 打包为 .exe
 
+发布构建继续固定为 **标准 Python 3.14 x64**，与多版本源码安装分开。先确保当前项目 `.venv` 用 `py -3.14 -m venv .venv` 创建；若现有环境是3.15，应先备份并新建3.14构建环境，再安装下面的固定依赖。不要在源码环境中盲目降级已安装的依赖。
+
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-build.lock.txt
 .\build.bat
@@ -268,7 +280,9 @@ elif config.TRANSLATOR == "myservice":
 
 `run_tests.bat` 运行mock网络/剪贴板的回归测试。`scripts/verify_*.py` 是真实Qt界面验收脚本，部分会请求外部翻译服务，运行前阅读脚本且使用示例文本。其截图、日志、隔离数据库位于被忽略的 `artifacts/`。
 
-当前记录：107个回归测试已通过，Alt+2真实窗口开关已验证；Alt+1完整实际按键验收曾被旧实例占用阻塞，仍需在没有冲突的环境验证。尚未完成另一台干净电脑的整机验收，构建成功不等于所有环境都兼容。
+GitHub Actions 分别对 Python **3.11、3.12、3.13、3.14、3.15** 安装二进制依赖、检查依赖一致性、运行回归测试并实际启动 Qt Windows 诊断窗口；另保留3.14固定构建基线测试。每次更新后的通过情况请查看 [Actions](https://github.com/chen-2024-cn/translate-assistant/actions)，不能把“有兼容wheel”当作“全部功能已验证”。
+
+Qt启动修复后已有113个回归用例；多版本检查会增加解释器检查用例。Alt+2真实窗口开关已验证；Alt+1完整实际按键验收曾被旧实例占用阻塞，仍需在没有冲突的环境验证。跨版本CI不覆盖所有真实鼠标取词、输入法、SAPI朗读与热键行为；另一台干净电脑的整机验收仍须补做。
 
 ---
 
@@ -298,12 +312,15 @@ Alt+1、托盘菜单和双击入口共用焦点处理，恢复最小化后自动
 - 若明确提示缺`qwindows.dll`，在该虚拟环境重新安装完整组件：
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install --force-reinstall PyQt5==5.15.11 PyQt5-Qt5==5.15.2 PyQt5_sip==12.19.0
+.\.venv\Scripts\python.exe -m pip install --only-binary=:all: --force-reinstall -r requirements.txt
 .\run.bat --diagnose
 ```
 
 - 如果DLL存在但初始化仍失败，保留诊断输出检查依赖/架构/安全软件记录；不要下载来源不明DLL，不要永久设置指向其他电脑的Qt路径。
 - `run.bat`适用于源码；使用exe时不需要安装PyQt5，exe插件问题需检查完整打包产物。
+
+**安装 PyQt5-sip 提示 Microsoft Visual C++ 编译工具？**
+先执行 `.\.venv\Scripts\python.exe --version`。旧固定构建锁使用 SIP 12.19.0，不能套用于3.15源码环境。更新仓库后使用 `--only-binary=:all: -r requirements.txt`；不要继续重复安装旧锁，也不必为了这个问题先安装整套C++工具。若仍提示 `No matching distribution`，请保留报错并检查 Python/Windows架构、镜像源是否同步所需wheel。升级pip不是兼容性保证。
 
 **启动时出现了终端窗口？**
 用 `run.bat` 启动不会残留终端窗口。如果自己执行 `python main.py`，程序会隐藏专属于它的控制台；想完全无窗口，请用 `pythonw main.py` 或直接运行打包好的 exe。

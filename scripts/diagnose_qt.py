@@ -9,6 +9,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from qt_runtime import configure_qt_runtime
+from python_runtime import check_python_runtime
 
 
 def probe():
@@ -32,6 +33,7 @@ def probe():
 
 
 def main():
+    check_python_runtime()
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     if "--probe" in sys.argv:

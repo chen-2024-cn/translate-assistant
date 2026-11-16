@@ -21,8 +21,11 @@ class TestQtRuntime(unittest.TestCase):
 
     def test_missing_plugin_reported_not_silent(self):
         with mock.patch('qt_runtime.Path.is_file', return_value=False):
-            with self.assertRaisesRegex(RuntimeError, 'qwindows.dll'):
+            with self.assertRaisesRegex(RuntimeError, 'qwindows.dll') as error:
                 find_windows_plugins(Path('missing-pyqt'))
+            self.assertIn('PyQt5-sip>=12.20.1', str(error.exception))
+            self.assertIn('--only-binary=:all:', str(error.exception))
+            self.assertNotIn('12.19.0', str(error.exception))
 
     def test_external_qt_folder_not_used(self):
         with mock.patch('qt_runtime.Path.is_file', return_value=False):
