@@ -17,6 +17,14 @@ except Exception:
 from python_runtime import check_python_runtime
 check_python_runtime()
 
+import logging
+
+from logging_setup import install_all as install_logging
+
+# 先装日志: 之后任何 Qt 插件/代理/网络错误, 即使没有控制台也有据可查
+LOG_PATH = install_logging()
+logger = logging.getLogger("app")
+
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import QObject, pyqtSignal, Qt
 
@@ -185,12 +193,15 @@ def _acquire_single_instance():
 
 def main():
     _hide_own_console()
+    logger.info("启动 | 日志: %s", LOG_PATH)
     mutex = _acquire_single_instance()
     if mutex is None:
+        logger.warning("已有实例在运行, 本次启动退出")
         return  # 已在托盘运行, 直接退出
     os.environ["QT_QPA_PLATFORM"] = "windows"  # 强制 Windows 原生后端
     app_wrapper = TranslateApp()
     app_wrapper.start()
+    logger.info("正常退出")
     # 退出后直接结束进程: 翻译线程可能还卡在网络请求里, 不强退的话进程会在后台挂着
     os._exit(0)
 

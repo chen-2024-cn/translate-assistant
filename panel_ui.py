@@ -22,6 +22,10 @@ from tts_engine import TTSEngine
 from vocabulary_store import VocabularyStore
 from vocabulary_ui import VocabularySaveButton, VocabularyWindow
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 STYLE = """
 QWidget {
     background-color: #1e1e2e;
@@ -198,15 +202,24 @@ class TranslatePanel(QWidget):
             self.showNormal()
         else:
             self.show()
-        self._focus_requested = True
-        self._focus_select_all = True
-        self._focus_deadline = time.monotonic() + 0.8
         self.raise_()
         self.activateWindow()
         try:
             win32gui.SetForegroundWindow(int(self.winId()))
         except win32gui.error:
             pass  # Windows可能限制跨进程激活,不模拟额外按键强抢焦点。
+        self._request_input_focus(select_all=True)
+
+    def _request_input_focus(self, select_all: bool = False):
+        """请求把键盘焦点放到原文输入框, 并在 1.5s 内重试。
+
+        窗口从隐藏/最小化恢复时, Qt 的 setFocus 经常早于 Windows 真正的激活,
+        焦点会被系统丢掉, 表现就是"面板能看见但打不了字"。
+        """
+        self._focus_requested = True
+        self._focus_select_all = select_all
+        self._focus_deadline = time.monotonic() + 1.5
+        self._focus_attempts = 0
         self._complete_input_focus()
         if self._focus_requested:
             self._focus_timer.start()
@@ -218,6 +231,15 @@ class TranslatePanel(QWidget):
             self._focus_timer.stop()
             return
         if not self.isActiveWindow() or QApplication.activePopupWidget() is not None:
+            # 还没成为前台窗口: 主动再请求一次激活, 但不能无限重试(会抢别的程序焦点)
+            self._focus_attempts = getattr(self, "_focus_attempts", 0) + 1
+            if self._focus_attempts <= 12:
+                self.raise_()
+                self.activateWindow()
+                return
+            self._focus_requested = False
+            self._focus_timer.stop()
+            logger.debug("输入框聚焦超时: 窗口未被激活, 由用户点击恢复")
             return
         self.input_edit.setFocus(Qt.ActiveWindowFocusReason)
         try:
@@ -232,6 +254,22 @@ class TranslatePanel(QWidget):
         if not (win32api.GetAsyncKeyState(win32con.VK_MENU) & 0x8000):
             self._focus_requested = False
             self._focus_timer.stop()
+            logger.debug("输入框已聚焦: active=%s focus=%s",
+                         self.isActiveWindow(),
+                         type(QApplication.focusWidget()).__name__ if QApplication.focusWidget() else None)
+
+    def changeEvent(self, event):
+        """从最小化恢复时补一次聚焦请求。"""
+        if event.type() == QEvent.WindowStateChange and not self.isMinimized():
+            self._request_input_focus()
+        return super().changeEvent(event)
+
+    def closeEvent(self, event):
+        """点右上角 X 时只隐藏(托盘常驻), 并清掉待执行的聚焦请求。"""
+        self._focus_requested = False
+        self._focus_timer.stop()
+        logger.info("面板已关闭到托盘")
+        super().closeEvent(event)
 
     def event(self, event):
         if event.type() in (QEvent.WindowDeactivate, QEvent.Hide):
@@ -253,8 +291,46 @@ class TranslatePanel(QWidget):
         self.result_edit.clear()
 
     def _on_pin(self, on: bool):
-        self.setWindowFlag(Qt.WindowStaysOnTopHint, on)
-        self.show()
+        """置顶开关。
+
+        ⚠️ 不能用 setWindowFlag() 实现: 对已经显示的窗口改 flags 会让 Qt 销毁并
+        重建原生窗口, 焦点、输入法上下文和 Z 序都会被重置——这正是"置顶后关掉
+        再打开就输入不了字"的根源。改用 Win32 SetWindowPos 只改 Z 序, 不重建窗口。
+        """
+        if self._apply_topmost(on):
+            logger.info("置顶=%s (Win32 SetWindowPos)", on)
+        else:
+            # 非 Windows 或调用失败时的兜底: 重建窗口, 并立刻补回焦点
+            visible = self.isVisible()
+            self.hide()
+            self.setWindowFlag(Qt.WindowStaysOnTopHint, on)
+            if visible:
+                self.present()
+            logger.warning("置顶=%s (setWindowFlag 兜底路径)", on)
+        self._refresh_pin_state(on)
+
+    def _apply_topmost(self, on: bool) -> bool:
+        try:
+            win32gui.SetWindowPos(
+                int(self.winId()),
+                win32con.HWND_TOPMOST if on else win32con.HWND_NOTOPMOST,
+                0, 0, 0, 0,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE,
+            )
+            return True
+        except Exception:
+            logger.debug("SetWindowPos 置顶失败", exc_info=True)
+            return False
+
+    def _refresh_pin_state(self, on: bool):
+        """保持勾选框与真实窗口状态一致(兜底路径重建窗口后勾选状态会被重置)。"""
+        if self.pin_box.isChecked() != bool(on):
+            self.pin_box.blockSignals(True)
+            self.pin_box.setChecked(bool(on))
+            self.pin_box.blockSignals(False)
+        if self.isMinimized():
+            self.showNormal()
+        self._request_input_focus()
 
     def _clear(self):
         self._revision += 1
@@ -315,6 +391,7 @@ class TranslatePanel(QWidget):
             display = enrich(result["original"], result["translated"])
             self._done.emit(result["original"], display, self._translator.name(), revision)
         except Exception as e:
+            logger.warning("面板翻译失败: %s", e, exc_info=True)
             self._failed.emit(str(e), revision)
 
     def _finish(self):

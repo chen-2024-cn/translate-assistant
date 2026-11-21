@@ -7,10 +7,60 @@ import os
 # ============================================================
 # 翻译 API 配置
 # 当前使用: 百度翻译开放平台 (通过用户环境变量提供 APPID/密钥)
-# 安全发布: 不在此文件填写真实凭证, 不会自动加载 .env 文件。
-# 注意: Google 免费接口在国内网络普遍被限流(HTTP 429), 故默认引擎改为百度;
-#       仍可通过 TRANSLATOR = "google" 切回
+# 安全发布: 不在此文件填写真实凭证。
+# 凭证来源(优先级从高到低):
+#   1. 系统/用户环境变量 (set_credentials.ps1 写入的用户变量)
+#   2. 项目根目录的 .env 文件 (本文件启动时读取, 不覆盖已有的环境变量)
+# .env 已被 .gitignore 忽略, 不会进 Git; 真实密钥永远不要写在本文件里。
 # ============================================================
+import os
+import sys
+from pathlib import Path
+
+
+def _project_root() -> Path:
+    """源码运行取项目根; 打包后取 exe 所在目录。"""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+ENV_FILE = _project_root() / ".env"
+
+
+def load_dotenv(path: Path | None = None) -> list:
+    """把 .env 里的 KEY=VALUE 读进 os.environ; 已存在的环境变量保持不变。
+
+    只支持最常见的写法: KEY=VALUE / KEY="VALUE" / export KEY=VALUE,
+    忽略空行与 # 开头注释行。返回本次真正写入的变量名(不含值, 便于日志)。
+    语义与常见 dotenv 一致: 环境变量优先, .env 只补空缺。
+    """
+    env_path = ENV_FILE if path is None else Path(path)
+    if not env_path.is_file():
+        return []
+    loaded = []
+    try:
+        raw = env_path.read_text(encoding="utf-8-sig")
+    except OSError:
+        return []
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.lower().startswith("export "):
+            line = line[7:].lstrip()
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if not key or key in os.environ:
+            continue
+        os.environ[key] = value
+        loaded.append(key)
+    return loaded
+
+
+LOADED_ENV_KEYS = load_dotenv()
+
 
 # --- 当前 API ---
 TRANSLATOR = "baidu"

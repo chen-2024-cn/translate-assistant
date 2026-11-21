@@ -12,7 +12,8 @@ try {
         $existing = [Environment]::GetEnvironmentVariable($name, 'User')
         if (-not [string]::IsNullOrEmpty($existing)) {
             $answer = Read-Host "$name already exists. Replace it? Type YES to confirm"
-            if ($answer -cne 'YES') { throw 'Cancelled. Existing credentials kept.' }
+            # -ine: 不区分大小写。原来用 -cne, 用户输入 yes/Yes 都会被判为取消。
+            if ($answer.Trim() -ine 'YES') { throw 'Cancelled. Existing credentials kept.' }
         }
     }
     [Environment]::SetEnvironmentVariable('BAIDU_APPID', $appId, 'User')
