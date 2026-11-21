@@ -8,6 +8,7 @@ import time
 import win32api
 import win32con
 import win32gui
+import win32process
 
 import pyperclip
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QEvent
@@ -25,6 +26,30 @@ from vocabulary_ui import VocabularySaveButton, VocabularyWindow
 import logging
 
 logger = logging.getLogger(__name__)
+
+# 抢前台的重试次数上限。超过后只反复 activateWindow(), 避免在 1.5s 内不断抢用户焦点。
+_FOCUS_FORCE_ATTEMPTS = 3
+# 聚焦重试间隔(ms)。窗口激活是异步的, 15ms 太密, 60ms 内可完成十几次检查。
+_FOCUS_RETRY_INTERVAL_MS = 60
+
+
+def _window_desc(hwnd) -> str:
+    """把 HWND 描述成 类名「标题」, 只用于日志排查。"""
+    if not hwnd:
+        return "None"
+    try:
+        cls = win32gui.GetClassName(hwnd) or ""
+        title = win32gui.GetWindowText(hwnd) or ""
+        return f"{cls[:32]}「{title[:32]}」"
+    except Exception:
+        return str(hwnd)
+
+
+def _real_window_backend() -> bool:
+    """是否真的接了 Windows 桌面。offscreen 后端(测试/无头)没有真实前台窗口,
+    前台判断与抢焦点都没有意义, 直接跳过。"""
+    return not QApplication.platformName().startswith("offscreen")
+
 
 STYLE = """
 QWidget {
@@ -92,7 +117,7 @@ class TranslatePanel(QWidget):
         self._focus_deadline = 0
         self._focus_select_all = False
         self._focus_timer = QTimer(self)
-        self._focus_timer.setInterval(15)
+        self._focus_timer.setInterval(_FOCUS_RETRY_INTERVAL_MS)
         self._focus_timer.timeout.connect(self._complete_input_focus)
         self._vocabulary = vocabulary if vocabulary is not None else VocabularyStore()
         self._vocabulary_window = None
@@ -117,6 +142,9 @@ class TranslatePanel(QWidget):
         self.vocabulary_btn.clicked.connect(self._open_vocabulary)
         header.addWidget(self.vocabulary_btn)
         self.pin_box = QCheckBox("置顶")
+        # 置顶是"点一下就完"的工具型控件, 不该抢键盘焦点: 否则点过它再关闭重开,
+        # Qt 会把焦点恢复到它身上, 用户敲的字全被复选框吃掉(只剩空格能切换勾选)。
+        self.pin_box.setFocusPolicy(Qt.NoFocus)
         self.pin_box.toggled.connect(self._on_pin)
         header.addWidget(self.pin_box)
         layout.addLayout(header)
@@ -204,11 +232,67 @@ class TranslatePanel(QWidget):
             self.show()
         self.raise_()
         self.activateWindow()
-        try:
-            win32gui.SetForegroundWindow(int(self.winId()))
-        except win32gui.error:
-            pass  # Windows可能限制跨进程激活,不模拟额外按键强抢焦点。
+        if not self._native_is_foreground():
+            logger.info("召回面板: 前台是 %s, 尝试抢前台",
+                        _window_desc(win32gui.GetForegroundWindow()))
+            self._force_foreground()
+            logger.info("抢前台后: 前台=%s Qt认为激活=%s",
+                        _window_desc(win32gui.GetForegroundWindow()), self.isActiveWindow())
         self._request_input_focus(select_all=True)
+
+    def _native_is_foreground(self) -> bool:
+        """以 Win32 的 GetForegroundWindow 为准判断键盘输入是否真的在本窗口。
+
+        ⚠️ 不能用 Qt 的 isActiveWindow(): 后台进程调用 SetForegroundWindow 会被
+        Windows 的前台锁静默拒绝, 而 Qt 仍认为窗口已激活——实测 fg 是别的程序、
+        isActiveWindow() 却是 True。用它判断会"假成功": 不重试、不记日志, 用户看到
+        面板置顶显示却打不了字。
+        """
+        if not _real_window_backend():
+            return True  # 无真实窗口(测试/无头环境), 不做前台判断
+        try:
+            return win32gui.GetForegroundWindow() == int(self.winId())
+        except Exception:
+            logger.debug("GetForegroundWindow 失败, 退回 isActiveWindow", exc_info=True)
+            return self.isActiveWindow()
+
+    def _force_foreground(self) -> bool:
+        """把前台从别的进程抢过来, 让键盘输入真的落到本窗口。
+
+        Windows 的前台锁(foreground lock)规定: 不是前台的进程调用
+        SetForegroundWindow 会被拒绝且不报错。AttachThreadInput 是文档认可的合法
+        绕过方式——把本线程附加到当前前台线程的输入队列上, 借用它的输入状态取得
+        前台权; 用完必须立即解除附加, 否则两个线程的键盘/焦点状态被绑在一起。
+        这是一次同步的短操作, 不等待、不睡眠, 失败就交给 _request_input_focus 重试。
+        """
+        try:
+            hwnd = int(self.winId())
+            fg = win32gui.GetForegroundWindow()
+            my_tid = win32api.GetCurrentThreadId()
+            fg_tid = 0
+            if fg:
+                try:
+                    fg_tid = win32process.GetWindowThreadProcessId(fg)[0]
+                except Exception:
+                    fg_tid = 0
+            attached = False
+            if fg_tid and fg_tid != my_tid:
+                attached = bool(win32process.AttachThreadInput(fg_tid, my_tid, True))
+            try:
+                win32gui.BringWindowToTop(hwnd)
+                win32gui.SetForegroundWindow(hwnd)
+                win32gui.SetActiveWindow(hwnd)
+            finally:
+                if attached:
+                    win32process.AttachThreadInput(fg_tid, my_tid, False)
+            if win32gui.GetForegroundWindow() == hwnd:
+                logger.debug("抢前台成功 (AttachThreadInput attached=%s)", attached)
+                return True
+            logger.info("抢前台失败: 前台仍是 %s", _window_desc(win32gui.GetForegroundWindow()))
+            return False
+        except Exception:
+            logger.warning("抢前台异常", exc_info=True)
+            return False
 
     def _request_input_focus(self, select_all: bool = False):
         """请求把键盘焦点放到原文输入框, 并在 1.5s 内重试。
@@ -230,23 +314,20 @@ class TranslatePanel(QWidget):
             self._focus_requested = False
             self._focus_timer.stop()
             return
-        if not self.isActiveWindow() or QApplication.activePopupWidget() is not None:
-            # 还没成为前台窗口: 主动再请求一次激活, 但不能无限重试(会抢别的程序焦点)
+        if QApplication.activePopupWidget() is not None:
+            # 有弹出菜单/对话框时不要抢前台, 等它关闭后的下一次重试
+            return
+        if not self._native_is_foreground():
+            # 还没有拿到前台: 前几次用 AttachThreadInput 主动抢, 之后只轻推
             self._focus_attempts = getattr(self, "_focus_attempts", 0) + 1
-            if self._focus_attempts <= 12:
+            if self._focus_attempts <= _FOCUS_FORCE_ATTEMPTS:
                 self.raise_()
                 self.activateWindow()
-                return
-            self._focus_requested = False
-            self._focus_timer.stop()
-            logger.debug("输入框聚焦超时: 窗口未被激活, 由用户点击恢复")
-            return
+                self._force_foreground()
+            else:
+                self.activateWindow()
+            return  # 由 1.5s 截止时间兜底, 不再按固定次数提前放弃
         self.input_edit.setFocus(Qt.ActiveWindowFocusReason)
-        try:
-            if win32gui.GetForegroundWindow() == int(self.winId()):
-                win32gui.SetFocus(int(self.input_edit.winId()))
-        except win32gui.error:
-            pass
         if self._focus_select_all:
             self.input_edit.selectAll()
             self._focus_select_all = False
@@ -257,6 +338,10 @@ class TranslatePanel(QWidget):
             logger.debug("输入框已聚焦: active=%s focus=%s",
                          self.isActiveWindow(),
                          type(QApplication.focusWidget()).__name__ if QApplication.focusWidget() else None)
+        elif time.monotonic() > self._focus_deadline:
+            self._focus_requested = False
+            self._focus_timer.stop()
+            logger.info("输入框已聚焦但 Alt 仍被按住, 停止重试")
 
     def changeEvent(self, event):
         """从最小化恢复时补一次聚焦请求。"""
@@ -276,9 +361,22 @@ class TranslatePanel(QWidget):
             if hasattr(self, "_focus_timer"):
                 self._focus_requested = False
                 self._focus_timer.stop()
-        elif event.type() == QEvent.WindowActivate and getattr(self, "_focus_requested", False):
-            QTimer.singleShot(0, self._complete_input_focus)
+        elif event.type() == QEvent.WindowActivate:
+            if getattr(self, "_focus_requested", False):
+                QTimer.singleShot(0, self._complete_input_focus)
+            QTimer.singleShot(0, self._restore_input_focus_on_activate)
         return super().event(event)
+
+    def _restore_input_focus_on_activate(self):
+        """窗口被激活后, 若焦点落空或停在"置顶"复选框上, 交还给原文输入框。
+
+        点过置顶复选框再关闭重开时, Qt 会把焦点恢复到那个复选框, 键盘事件全被它
+        吃掉(回车/空格只会切换勾选), 用户看到的就是"面板能看见但打不了字"。
+        这里只接管"落空"和"置顶复选框"两种情况, 不抢用户主动点的其他控件。
+        """
+        current = QApplication.focusWidget()
+        if current is None or current is self.pin_box:
+            self.input_edit.setFocus(Qt.ActiveWindowFocusReason)
 
     def _show_vocabulary(self):
         if self._vocabulary_window is None:
