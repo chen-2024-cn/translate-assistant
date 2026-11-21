@@ -1,24 +1,34 @@
-' 无控制台启动器: 用 WScript 以隐藏窗口(样式 0)启动解释器, 启动后立即返回。
-' 用途: 当 .venv 里没有 pythonw.exe 时, run.bat 用它兜底, 保证不留可见终端,
-'       且关闭任何终端/父进程都不会带走翻译助手。
+' Silent launcher for TranslateAssistant.
+' Runs main.py with a hidden window so no console is created, then returns at once.
+' Keep this file ASCII-only: Windows Script Host reads .vbs in the system ANSI
+' codepage, so UTF-8 Chinese text here fails with 800A0408 "invalid character".
 Option Explicit
 
-Dim fso, shell, root, pyw, py, target
+Dim fso, sh, root, pyw, py, target, cmd
 Set fso = CreateObject("Scripting.FileSystemObject")
-Set shell = CreateObject("WScript.Shell")
+Set sh = CreateObject("WScript.Shell")
 
 root = fso.GetParentFolderName(WScript.ScriptFullName)
 pyw = root & "\.venv\Scripts\pythonw.exe"
 py = root & "\.venv\Scripts\python.exe"
 
-target = pyw
-If Not fso.FileExists(target) Then target = py
-If Not fso.FileExists(target) Then
-    MsgBox "未找到 .venv 解释器。" & vbCrLf & "请先按 README 创建虚拟环境:" & vbCrLf & _
-           "py -3.14 -m venv .venv", 16, "翻译助手"
+If fso.FileExists(pyw) Then
+    target = pyw
+ElseIf fso.FileExists(py) Then
+    target = py
+Else
+    MsgBox "No Python interpreter found in .venv" & vbCrLf & _
+           "Create it first: py -3.14 -m venv .venv", 16, "TranslateAssistant"
     WScript.Quit 1
 End If
 
-shell.CurrentDirectory = root
-' 0 = 隐藏窗口, False = 不等待进程结束
-shell.Run """" & target & """ """ & root & "\main.py""", 0, False
+If Not fso.FileExists(root & "\main.py") Then
+    MsgBox "main.py not found next to this script.", 16, "TranslateAssistant"
+    WScript.Quit 1
+End If
+
+sh.CurrentDirectory = root
+' style 0 = hidden window, False = do not wait for the process
+cmd = """" & target & """ """ & root & "\main.py"""
+sh.Run cmd, 0, False
+WScript.Quit 0
